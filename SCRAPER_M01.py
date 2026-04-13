@@ -31,6 +31,6 @@ def extrair_citacoes():
     df.to_csv("dados_teste.csv", index=False)
     
     print(f"Sucesso! {len(df)} citações foram salvas no arquivo 'dados_teste.csv'.")
-
+    # teste
 if __name__ == "__main__":
     extrair_citacoes()
