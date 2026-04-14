@@ -1,4 +1,59 @@
-while True:
+import pandas as pd
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+import undetected_chromedriver as uc
+import time
+import random
+
+def eh_obra_real(texto_objeto):
+    texto = texto_objeto.lower()
+    
+    excluir = [
+        "aquisição", "compra", "fornecimento", "merenda", "medicamento", 
+        "limpeza", "conservação rotineira", "locação", "aluguel", 
+        "licenciamento", "roçada", "capina", "varrição", "manutenção preventiva"
+    ]
+    
+    incluir = [
+        "construção", "pavimentação", "reforma", "revitalização", 
+        "drenagem", "recapeamento", "terraplenagem", "urbanização", 
+        "ampliação", "restauração", "contenção", "saneamento", "obra"
+    ]
+
+    if any(termo in texto for termo in excluir):
+        return False, "FALSO (Serviço/Compra)"
+
+    if any(termo in texto for termo in incluir):
+        return True, "VERDADEIRO (Obra de Engenharia)"
+
+    return False, "FALSO (Fora do escopo)"
+
+def extrair_contratos_macae_avancado():
+    # 1. PREPARAÇÃO DO NAVEGADOR INVISÍVEL
+    options = uc.ChromeOptions()
+    print("Iniciando o navegador invisível...")
+    
+    # Inicia apenas UMA vez usando o undetected_chromedriver
+    driver = uc.Chrome(options=options)
+    wait = WebDriverWait(driver, 15)
+
+    print("Acessando o portal de Macaé...")
+    driver.get("https://transparencia.macae.rj.gov.br/contratacoes/contratos?tpcontrato=1")
+    
+    resultados_completos = []
+    contador_linha = 1
+
+    try:
+        print("Clicando em Buscar...")
+        botao_buscar = wait.until(EC.element_to_be_clickable((By.ID, "btn-buscar")))
+        botao_buscar.click()
+
+        wait.until(EC.presence_of_element_located((By.TAG_NAME, "table")))
+        time.sleep(3) 
+        print("Tabela carregada! Iniciando varredura...\n" + "="*80)
+
+        while True:
             aba_tabela = driver.current_window_handle
             
             # Pega os IDs da página atual
@@ -79,4 +134,33 @@ while True:
             # Fim da página de contratos, volta para a tabela principal para clicar em "Próximo"
             driver.switch_to.window(aba_tabela)
             
-            # ... SEU CÓDIGO DE PAGINAÇÃO VEM AQUI ...
+            # Fim da página de contratos, volta para a tabela principal para clicar em "Próximo"
+            driver.switch_to.window(aba_tabela)
+            
+            # --- CÓDIGO DE PAGINAÇÃO ---
+            try:
+                print("\nMudando para a próxima página da tabela...")
+                botao_proximo = driver.find_element(By.XPATH, "//li[contains(@class, 'next')]/a | //a[contains(text(), 'Próximo')]")
+                
+                # Se o botão "Próximo" estiver desativado, significa que chegamos na última página
+                if "disabled" in botao_proximo.get_attribute("class") or not botao_proximo.is_displayed():
+                    print("Última página alcançada!")
+                    break 
+                
+                # Clica no botão e espera a nova tabela carregar
+                driver.execute_script("arguments[0].scrollIntoView();", botao_proximo)
+                driver.execute_script("arguments[0].click();", botao_proximo)
+                time.sleep(5) 
+                
+            except Exception as e:
+                print("Não encontrou mais páginas. Encerrando a varredura.")
+                break # Sai do loop gigante "while True" e vai salvar o CSV
+
+    finally:
+        driver.quit()
+        df = pd.DataFrame(resultados_completos)
+        df.to_csv("historico_completo_macae.csv", index=False)
+        print(f"\nVarredura finalizada com sucesso! {len(df)} obras prontas no CSV.")
+
+if __name__ == "__main__":
+    extrair_contratos_macae_avancado()
