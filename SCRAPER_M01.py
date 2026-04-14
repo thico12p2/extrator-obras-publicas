@@ -1,126 +1,82 @@
-import pandas as pd
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from webdriver_manager.chrome import ChromeDriverManager
-import time
-
-def eh_obra_real(texto_objeto):
-    texto = texto_objeto.lower()
-    
-    # 1. Termos de Exclusão (Se tiver isso, o script pula o contrato)
-    # Usamos termos compostos para não bloquear obras reais (ex: não bloquear "fornecimento de material e mão de obra")
-    excluir = [
-        "aquisição", "compra", "fornecimento de peças", "fornecimento de pneus", 
-        "merenda", "medicamento", "limpeza urbana", "conservação rotineira",
-        "locação de veículos", "aluguel de software", "licenciamento",
-        "roçada", "capina", "varrição", "manutenção preventiva de ar"
-    ]
-    
-    # 2. Palavras de Inclusão (Obras reais de engenharia)
-    incluir = [
-        "construção", "pavimentação", "reforma", "revitalização", 
-        "drenagem", "recapeamento", "terraplenagem", "urbanização", 
-        "ampliação", "restauração", "contenção de encosta", "saneamento"
-    ]
-
-    # Verifica se é um falso positivo (Compra/Serviço rotineiro)
-    if any(termo in texto for termo in excluir):
-        return False, "Bloqueado por exclusão"
-
-    # Verifica se tem alguma palavra-chave de engenharia
-    palavras_encontradas = [termo for termo in incluir if termo in texto]
-    if palavras_encontradas:
-        return True, f"Aprovado: {palavras_encontradas[0]}"
-
-    return False, "Fora do escopo"
-
-def extrair_contratos_macae_avancado():
-    options = Options()
-    # options.add_argument("--headless")
-    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
-    wait = WebDriverWait(driver, 15)
-
-    url_lista = "https://transparencia.macae.rj.gov.br/contratacoes/contratos?tpcontrato=1"
-    driver.get(url_lista)
-
-    obras_validadas = []
-
-    try:
-        while True:
-            wait.until(EC.presence_of_element_located((By.TAG_NAME, "table")))
-            linhas = driver.find_elements(By.CSS_SELECTOR, "table tbody tr")
+while True:
+            aba_tabela = driver.current_window_handle
             
-            for i in range(len(linhas)):
-                linhas_atualizadas = driver.find_elements(By.CSS_SELECTOR, "table tbody tr")
-                linha = linhas_atualizadas[i]
-                janela_principal = driver.current_window_handle
+            # Pega os IDs da página atual
+            linhas = driver.find_elements(By.CSS_SELECTOR, "table tbody tr")
+            ids_da_pagina = []
+            for linha in linhas:
+                id_contrato = linha.get_attribute("id")
+                if id_contrato:
+                    ids_da_pagina.append(id_contrato)
+            
+            # Garante que temos uma segunda aba aberta APENAS UMA VEZ para ler os contratos
+            if len(driver.window_handles) == 1:
+                driver.switch_to.new_window('tab')
+            aba_leitura = driver.window_handles[1]
+            
+            # Abre e lê cada contrato
+            for indice, id_contrato in enumerate(ids_da_pagina):
                 
-                try:
-                    # Encontra o link de detalhes daquela linha específica
-                    botao = linha.find_element(By.CSS_SELECTOR, "a[href*='mostrarcontratos']")
-                    link_contrato = botao.get_attribute("href")
-                    
-                    # Abre uma nova aba diretamente com o link (mais rápido e estável que clicar)
-                    driver.execute_script(f"window.open('{link_contrato}', '_blank');")
-                    wait.until(EC.number_of_windows_to_be(2))
-                    driver.switch_to.window(driver.window_handles[1])
+                # ESTRATÉGIA DE LOTES: A cada 10 contratos, dá uma pausa longa para esfriar o servidor
+                if indice > 0 and indice % 10 == 0:
+                    print(f"[{contador_linha}] Pausa estratégica de 15s para não acionar o firewall...")
+                    time.sleep(15)
+                else:
+                    time.sleep(random.uniform(3.5, 6.5)) # Pausa normal um pouco maior
+                
+                url_direta = f"https://transparencia.macae.rj.gov.br/default/contratacoes/mostrarcontratos?id={id_contrato}"
+                
+                # LOOP DE TENTATIVA E RECUPERAÇÃO DO 403
+                while True:
+                    try:
+                        driver.switch_to.window(aba_leitura)
+                        driver.get(url_direta)
 
-                    # Estratégia para pegar o texto logo após a palavra "Objeto:"
-                    # Procura qualquer elemento que contenha "Objeto" e tenta pegar o texto do pai ou irmão seguinte
-                    elemento_objeto = wait.until(EC.presence_of_element_located(
-                        (By.XPATH, "//*[contains(translate(text(), 'OBJETO', 'objeto'), 'objeto')]/..")
-                    ))
-                    texto_completo = elemento_objeto.text
-                    
-                    # Limpa a string para pegar apenas o que importa
-                    if "Objeto:" in texto_completo:
-                        texto_limpo = texto_completo.split("Objeto:")[1].strip()
-                    else:
-                        texto_limpo = texto_completo
+                        # Verifica se tomamos o bloqueio 403 olhando o texto bruto da tela
+                        texto_tela = driver.find_element(By.TAG_NAME, "body").text
+                        if "403 Forbidden" in texto_tela or "Request forbidden" in texto_tela:
+                            print("\n" + "!"*80)
+                            print(f"🚨 BLOQUEIO 403 DETECTADO NO CONTRATO {contador_linha}!")
+                            print("O servidor bloqueou seu IP temporariamente.")
+                            print("SOLUÇÃO:")
+                            print("1. Roteie a internet do seu celular (4G) para o computador.")
+                            print("   (Ou ligue/desligue o modo avião no celular para trocar o IP do 4G).")
+                            print("2. Pressione ENTER aqui no terminal para o robô tentar ler novamente.")
+                            print("!"*80 + "\n")
+                            input("Pressione ENTER quando tiver trocado a rede para continuar...")
+                            continue # Volta pro início do 'while True' e tenta carregar o mesmo link!
 
-                    # Passa pelo nosso Super Filtro
-                    aprovado, motivo = eh_obra_real(texto_limpo)
-                    
-                    if aprovado:
-                        print(f"✅ {motivo} -> {texto_limpo[:60]}...")
-                        obras_validadas.append({
-                            "Objeto": texto_limpo,
-                            "Link": link_contrato
+                        # Se não tem 403, segue a vida e procura a caixa do objeto
+                        caixa_objeto = wait.until(EC.presence_of_element_located((By.ID, "dsobjeto")))
+                        
+                        texto_objeto = caixa_objeto.get_attribute("value")
+                        if not texto_objeto:
+                            texto_objeto = caixa_objeto.text
+                            
+                        texto_objeto = texto_objeto.replace('\n', ' ').strip()
+                        if not texto_objeto:
+                            texto_objeto = "ERRO: O campo de objeto estava vazio."
+
+                        aprovado, status = eh_obra_real(texto_objeto)
+                        print(f"{contador_linha}. {status} -> {texto_objeto[:100]}...\n{'-'*80}")
+                        
+                        resultados_completos.append({
+                            "id_tabela": contador_linha,
+                            "id_macae": id_contrato,
+                            "classificacao": status,
+                            "objeto": texto_objeto,
+                            "url": url_direta
                         })
-                    else:
-                        print(f"❌ {motivo} ignorado.")
+                        
+                        contador_linha += 1
+                        break # Sai do loop de tentativa e vai para o próximo contrato (for)
 
-                except Exception as e:
-                    print("Erro ao processar linha.")
+                    except Exception as e:
+                        print(f"{contador_linha}. ERRO TÉCNICO -> Link {url_direta}. Tentando pular... Detalhe: {str(e)[:50]}")
+                        contador_linha += 1
+                        break # Se der um erro bizarro que não é 403, ele pula o contrato
                 
-                finally:
-                    # Garante que a aba secundária feche e volte para a principal
-                    if len(driver.window_handles) > 1:
-                        driver.close()
-                        driver.switch_to.window(janela_principal)
-
-            # Paginação
-            try:
-                botao_proximo = driver.find_element(By.XPATH, "//li[contains(@class, 'next')]/a | //a[contains(text(), 'Próximo')]")
-                if "disabled" in botao_proximo.get_attribute("class"):
-                    break
-                # Rola a tela até o botão para evitar erro de clique interceptado
-                driver.execute_script("arguments[0].scrollIntoView();", botao_proximo)
-                botao_proximo.click()
-                time.sleep(3) 
-            except:
-                break
-
-    finally:
-        driver.quit()
-        df = pd.DataFrame(obras_validadas)
-        # Salva o arquivo pronto para ser importado no Supabase depois
-        df.to_csv("obras_macae_limpas.csv", index=False)
-        print(f"\nExtração concluída! {len(df)} obras de engenharia reais filtradas.")
-
-if __name__ == "__main__":
-    extrair_contratos_macae_avancado()
+            # Fim da página de contratos, volta para a tabela principal para clicar em "Próximo"
+            driver.switch_to.window(aba_tabela)
+            
+            # ... SEU CÓDIGO DE PAGINAÇÃO VEM AQUI ...
