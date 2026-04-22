@@ -12,7 +12,7 @@ def extrair_e_baixar_licitacoes():
     # =========================================================
     # CONFIGURAÇÕES DE DOWNLOAD E INICIALIZAÇÃO
     # =========================================================
-    pasta_downloads = r"C:\caminho\para\sua\pasta\EDITAIS"
+    pasta_downloads = r"caminho_para_downloads"
     os.makedirs(pasta_downloads, exist_ok=True)
 
     prefs = {
