@@ -20,7 +20,7 @@ SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJ
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # Substitua pela sua chave real
-GEMINI_API_KEY = "AIzaSyBeWSsC4Jza9fdDzic2uaDKnUgEAzLFkHc"
+GEMINI_API_KEY = "CHAVE GEMINI"
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 # =========================================================
@@ -41,183 +41,149 @@ def extrair_dados_com_gemini(caminho_pdf):
         arquivo_pdf = client.files.upload(file=caminho_pdf)
         
         prompt = """
-        Você é um assistente especializado em licitações e obras públicas.
-        Analise o documento PDF em anexo e extraia exatamente as seguintes informações. 
-        Se uma informação não estiver presente no documento, retorne null para números ou "Não especificado" para textos.
+        Você é um assistente especializado em licitações.
+        Analise o PDF e extraia:
+        1. Objeto: Um resumo curto (uma frase) do que é a obra.
+        2. Valor total estimado.
+        3. Área em metros quadrados (m²).
+        4. Prazo de execução.
+        5. Empresa vencedora (se houver).
+        6. Tipo da obra (Construção, Reparo, Pavimentação, Saneamento, Iluminação ou Outros).
         
-        1. Valor total ou global estimado da obra.
-        2. A área da obra em metros quadrados (m²). DICA: Essa informação geralmente é encontrada nas seções chamadas "Memorial Descritivo", "Escopo" ou "Planilha Orçamentária".
-        3. Previsão de datas de início e fim, ou o prazo de execução (ex: "180 dias", "12 meses").
-        4. Quantidade de trabalhadores/funcionários previstos ou exigidos.
-        5. Nome da empresa que realizou/venceu o serviço (caso o documento seja um contrato ou já cite a vencedora).
-        6. O tipo da obra. Você DEVE classificar obrigatoriamente em UMA destas categorias EXATAS: 
-           "Construção (prédios, praças)", "Reparo/Reforma", "Pavimentação", "Saneamento/Drenagem", "Iluminação Pública" ou "Outros".
-        
-        Responda APENAS com um objeto JSON válido. Não adicione textos antes ou depois.
-        Formato obrigatório:
+        Responda APENAS JSON:
         {
-            "valor": 150000.50,
-            "metros_quadrados": "150 m²",
-            "prazo": "120 dias",
-            "trabalhadores": "15",
-            "empresa": "Construtora Exemplo LTDA",
-            "tipo_obra": "Reparo/Reforma"
+            "objeto": "texto",
+            "valor": 0.0,
+            "metros_quadrados": "texto",
+            "prazo": "texto",
+            "empresa": "texto",
+            "tipo_obra": "texto"
         }
         """
         
-        print("       -> Analisando documento com IA (buscando múltiplos dados)...")
-        resposta = client.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=[arquivo_pdf, prompt]
-        )
-        
+        resposta = client.models.generate_content(model='gemini-2.5-flash', contents=[arquivo_pdf, prompt])
         texto_limpo = resposta.text.replace("```json", "").replace("```", "").strip()
         dados_ia = json.loads(texto_limpo)
         
-        dados_formatados = {
-            "valor": dados_ia.get("valor"),
-            "metros_quadrados": dados_ia.get("metros_quadrados", "Não especificado"),
-            "prazo_ou_datas": dados_ia.get("prazo", "Não especificado"),
-            "quantidade_trabalhadores": dados_ia.get("trabalhadores", "Não especificado"),
-            "empresa_contratada": dados_ia.get("empresa", "Não especificado"),
-            "tipo_obra": dados_ia.get("tipo_obra", "Outros")
-        }
-            
         client.files.delete(name=arquivo_pdf.name)
+        return dados_ia
         
     except Exception as e:
-        print(f"       [!] Erro na leitura do PDF pelo Gemini: {e}")
-        dados_formatados = {
-            "valor": None, "metros_quadrados": "Erro na IA", "prazo_ou_datas": "Erro",
-            "quantidade_trabalhadores": "Erro", "empresa_contratada": "Erro", "tipo_obra": "Outros"
-        }
-    
-    print("       -> ⏳ Pausando por 15 segundos para respeitar o limite de requisições da IA...")
-    time.sleep(15)
-    
-    return dados_formatados
+        print(f"       [!] Erro na IA: {e}")
+        return None
+
+# =========================================================
+# FUNÇÕES DE PROCESSAMENTO E UPLOAD (CORRIGIDO 409)
+# =========================================================
 
 def processar_e_enviar_supabase(caminho_arquivo, numero_licitacao):
     try:
-        nome_arquivo = os.path.basename(caminho_arquivo)
+        # CORREÇÃO 409: Criamos um nome único usando o número da licitação
+        # Substituímos "/" por "-" para não dar erro de pasta no SO
+        num_seguro = numero_licitacao.replace("/", "-")
+        nome_original = os.path.basename(caminho_arquivo)
+        nome_arquivo_unico = f"{num_seguro}_{nome_original}"
         
-        print("       -> Iniciando extração Inteligente...")
+        print(f"       -> Iniciando extração Inteligente para {numero_licitacao}...")
         dados = extrair_dados_com_gemini(caminho_arquivo)
         
-        print(f"       -> [IA] Tipo: {dados['tipo_obra']} | Valor: R$ {dados['valor']} | Metragem: {dados['metros_quadrados']}")
-        
-        print("       -> Fazendo upload para o Supabase Storage...")
+        if not dados:
+            print("       [!] IA não retornou dados. Pulando registro.")
+            return
+
+        print("       -> Fazendo upload para o Supabase Storage (Nome Único)...")
         with open(caminho_arquivo, 'rb') as f:
-            supabase.storage.from_('editais-obras').upload(nome_arquivo, f)
+            # Usamos o nome único para evitar o erro 409
+            supabase.storage.from_('editais-obras').upload(nome_arquivo_unico, f)
         
-        url_publica = supabase.storage.from_('editais-obras').get_public_url(nome_arquivo)
+        url_publica = supabase.storage.from_('editais-obras').get_public_url(nome_arquivo_unico)
         
         print("       -> Salvando registro no Banco de Dados...")
         registro = {
             "numero_licitacao": numero_licitacao,
             "url_pdf": url_publica,
-            "valor": dados["valor"],
-            "metros_quadrados": dados["metros_quadrados"],
-            "prazo": dados["prazo_ou_datas"],
-            "trabalhadores": str(dados["quantidade_trabalhadores"]), 
-            "empresa": dados["empresa_contratada"],
-            "tipo_obra": dados["tipo_obra"]
+            "objeto": dados.get("objeto", "Não extraído"),
+            "valor": dados.get("valor"),
+            "metros_quadrados": dados.get("metros_quadrados"),
+            "prazo": dados.get("prazo"),
+            "trabalhadores": str(dados.get("trabalhadores", "Não especificado")),
+            "empresa": dados.get("empresa"),
+            "tipo_obra": dados.get("tipo_obra")
         }
         
         supabase.table("licitacoes").insert(registro).execute()
-        print("       -> ✅ Sucesso! Documento integrado na nuvem.")
+        print(f"       -> ✅ Sucesso! Objeto salvo: {registro['objeto'][:40]}...")
         
         os.remove(caminho_arquivo)
-        print("       -> 🗑️ Limpeza: Arquivo local apagado do seu Mac.")
         
     except Exception as e:
-        print(f"       [!] Erro crítico na integração com Supabase: {e}")
+        # Se o erro for de duplicidade, avisamos mas não travamos o código
+        if "Duplicate" in str(e):
+            print(f"       [!] Aviso: O arquivo {nome_arquivo_unico} já existe no Storage. Pulando upload.")
+        else:
+            print(f"       [!] Erro crítico na integração: {e}")
 
 # =========================================================
-# FUNÇÃO PRINCIPAL DO SCRAPER
+# FASE 1: EXTRAÇÃO (CORREÇÃO DA PAGINAÇÃO)
 # =========================================================
-def extrair_e_baixar_licitacoes():
-    pasta_downloads = os.path.expanduser("~/Downloads/Editais_Macae")
-    os.makedirs(pasta_downloads, exist_ok=True)
 
-    prefs = {
-        "download.default_directory": pasta_downloads,
-        "download.prompt_for_download": False,
-        "download.directory_upgrade": True,
-        "plugins.always_open_pdf_externally": True,
-        "profile.default_content_settings.popups": 0
-    }
-    
-    opcoes = webdriver.ChromeOptions()
-    opcoes.add_experimental_option("prefs", prefs)
-    
-    # NOVAS CONFIGURAÇÕES DE ESTABILIDADE
-    opcoes.add_argument('--no-sandbox')
-    opcoes.add_argument('--disable-dev-shm-usage')
-    opcoes.add_argument('--disable-blink-features=AutomationControlled')
-    opcoes.add_experimental_option("excludeSwitches", ["enable-automation"])
-    opcoes.add_experimental_option('useAutomationExtension', False)
-    
-    opcoes.add_argument("--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
-
-    driver = webdriver.Chrome(options=opcoes)
-    
-    driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
-        "source": "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
-    })
-    
-    wait = WebDriverWait(driver, 25) 
-
-    numeros_licitacao = []
+# Dentro da função extrair_e_baixar_licitacoes, substitua o bloco da Fase 1:
 
     try:
         print("--- FASE 1: EXTRAÇÃO DE CONTRATOS ---")
         driver.get("https://transparencia.macae.rj.gov.br/contratacoes/contratos")
         time.sleep(5) 
 
-        print("Configurando os filtros...")
-        xpath_tipo_contrato = "//select[@id='idtipocontrato']"
-        xpath_tipo_licitacao = "//select[@id='idtipolicitacao']"
-
-        elemento_tipo = wait.until(EC.presence_of_element_located((By.XPATH, xpath_tipo_contrato)))
-        Select(elemento_tipo).select_by_visible_text("Obras e Serviços de Engenharia")
-
-        elemento_licitacao = wait.until(EC.presence_of_element_located((By.XPATH, xpath_tipo_licitacao)))
-        Select(elemento_licitacao).select_by_visible_text("Concorrência Pública")
-
+        # ... (Seu código de configurar filtros continua igual até o clique no 'Buscar') ...
         driver.find_element(By.XPATH, "//button[contains(@class, 'btn') and contains(text(), 'Buscar')]").click()
-        time.sleep(12)
+        time.sleep(10)
 
         pagina_atual = 1
-        parada = True
-
-        while parada:
-            parada = False
+        
+        # LÓGICA DE PAGINAÇÃO BLINDADA
+        while True:
             print(f"\nLendo a página {pagina_atual}...")
+            
+            # Espera as linhas da tabela carregarem
+            wait.until(EC.presence_of_element_located((By.XPATH, "//table/tbody/tr[@role='row']")))
             linhas = driver.find_elements(By.XPATH, "//table/tbody/tr[@role='row']")
 
             for linha in linhas:
                 try:
                     coluna_licitacao = linha.find_element(By.XPATH, "./td[6]")
                     numero = coluna_licitacao.text.strip()
-                    if numero and numero != "...":
+                    if numero and numero != "..." and numero not in numeros_licitacao:
                         numeros_licitacao.append(numero)
-                except Exception:
-                    pass
+                except:
+                    continue
 
+            # Tentativa de ir para a próxima página
             try:
                 xpath_botao_proximo = "//a[contains(text(), 'Próxima') or contains(text(), 'Próximo')]"
-                botao_proximo = driver.find_element(By.XPATH, xpath_botao_proximo)
-                classe_botao = botao_proximo.get_attribute("class")
+                # Verifica se o botão existe
+                botoes = driver.find_elements(By.XPATH, xpath_botao_proximo)
+                
+                if not botoes:
+                    print("-> Fim das páginas: Botão 'Próximo' não encontrado.")
+                    break
+                
+                botao_proximo = botoes[0]
                 classe_pai = botao_proximo.find_element(By.XPATH, "..").get_attribute("class")
 
-                if "disabled" in classe_botao or "disabled" in classe_pai:
+                # Se o botão estiver desabilitado, paramos
+                if "disabled" in classe_pai:
+                    print("-> Chegamos na última página.")
                     break
 
-                botao_proximo.click()
+                # Clique Seguro
+                driver.execute_script("arguments[0].click();", botao_proximo)
                 pagina_atual += 1
-                time.sleep(random.uniform(5, 9))
-            except Exception:
+                
+                # Pausa para o site processar a troca de página
+                time.sleep(random.uniform(6, 10))
+                
+            except Exception as e:
+                print(f"-> Parando paginação: {e}")
                 break
 
         print(f"-> Sucesso! Total de Licitações extraídas: {len(numeros_licitacao)}")
